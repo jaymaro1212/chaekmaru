@@ -364,10 +364,27 @@ const Sources = {
         const root = r.title.split("/")[0];
         if (seen.has(root)) continue;
         const m = root.match(/^(.*?)\s*\(([^)]+)\)$/);
-        seen.set(root, {id: "ws:" + root, source: "ws", type: "text", wtitle: root, title: m ? m[1] : root, author: m ? m[2] : "",
-          snippet: r.snippet.replace(/<[^>]+>/g, "").replace(/&[a-z#0-9]+;/gi, " ")});
+        const snip = r.snippet.replace(/<[^>]+>/g, "").replace(/&[a-z#0-9]+;/gi, " ");
+        let author = m ? m[2] : "";
+        if (!author) { const am = snip.match(/저자[\s:：]+([가-힣]{2,12})/); if (am) author = am[1]; }
+        seen.set(root, {id: "ws:" + root, source: "ws", type: "text", wtitle: root, title: m ? m[1] : root, author, snippet: snip});
       }
-      return [...seen.values()].slice(0, 20);
+      const list = [...seen.values()].slice(0, 20);
+      // 저자(머리말)를 한 번에 가져와 채우기
+      const need = list.filter(it => !it.author);
+      if (need.length) {
+        try {
+          const w = await fetchJSON(`${this.api}?action=query&prop=revisions&rvprop=content&rvslots=main&rvsection=0&titles=${enc(need.map(it => it.wtitle).join("|"))}&redirects=1&format=json&formatversion=2&origin=*`);
+          const norm = {}; for (const r of (w.query?.normalized || [])) norm[r.from] = r.to;
+          const byTitle = {}; for (const pg of (w.query?.pages || [])) byTitle[pg.title] = pg.revisions?.[0]?.slots?.main?.content || "";
+          for (const it of need) {
+            const wt = byTitle[norm[it.wtitle] || it.wtitle] || "";
+            const am = wt.match(/(?:저자|author)\s*=\s*(?:\[\[\s*(?:저자|Author)\s*:)?\s*([^\|\]\n}#]+)/i);
+            if (am) { const a = am[1].trim(); if (a && !/^\s*$/.test(a) && a.length <= 20) it.author = a; }
+          }
+        } catch (e) {}
+      }
+      return list;
     },
     async parse(title){
       const j = await fetchJSON(`${this.api}?action=parse&page=${enc(title)}&prop=text&redirects=1&formatversion=2&format=json&origin=*`);
