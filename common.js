@@ -357,34 +357,61 @@ const Sources = {
   ws: {
     label: "한국 고전소설 · 위키문헌",
     api: "https://ko.wikisource.org/w/api.php",
-    async search(q){
-      const j = await fetchJSON(`${this.api}?action=query&list=search&srsearch=${enc(q)}&srnamespace=0&srlimit=30&format=json&origin=*`);
+    item(title, author, snip){
+      const root = title.split("/")[0];
+      const m = root.match(/^(.*?)\s*\(([^)]+)\)$/);
+      return {id: "ws:" + root, source: "ws", type: "text", wtitle: root, title: m ? m[1] : root, author: author || (m ? m[2] : ""), snippet: snip || ""};
+    },
+    async search(q, mode){ return (mode === "author") ? this.searchAuthor(q) : this.searchTitle(q); },
+    async searchTitle(q){
+      const norm = s => s.replace(/\s/g, "").toLowerCase(), nq = norm(q);
+      const docs = [];
+      // 제목 안에서만 찾기 (본문 매칭 제외)
+      try { const j = await fetchJSON(`${this.api}?action=query&list=search&srsearch=${enc("intitle:" + q)}&srnamespace=0&srlimit=40&format=json&origin=*`); for (const r of (j.query?.search || [])) docs.push({title: r.title, snip: r.snippet}); } catch (e) {}
+      try { const p = await fetchJSON(`${this.api}?action=query&list=prefixsearch&pssearch=${enc(q)}&psnamespace=0&pslimit=40&format=json&origin=*`); for (const x of (p.query?.prefixsearch || [])) if (!docs.find(d => d.title === x.title)) docs.push({title: x.title, snip: ""}); } catch (e) {}
       const seen = new Map();
-      for (const r of (j.query?.search || [])) {
-        const root = r.title.split("/")[0];
+      for (const r of docs) {
+        const root = r.title.split("/")[0], base = root.replace(/\s*\([^)]*\)$/, "");
+        if (!norm(base).includes(nq)) continue; // 제목에 검색어가 실제로 들어간 것만
         if (seen.has(root)) continue;
-        const m = root.match(/^(.*?)\s*\(([^)]+)\)$/);
-        const snip = r.snippet.replace(/<[^>]+>/g, "").replace(/&[a-z#0-9]+;/gi, " ");
-        let author = m ? m[2] : "";
-        if (!author) { const am = snip.match(/저자[\s:：]+([가-힣]{2,12})/); if (am) author = am[1]; }
-        seen.set(root, {id: "ws:" + root, source: "ws", type: "text", wtitle: root, title: m ? m[1] : root, author, snippet: snip});
+        const snip = (r.snip || "").replace(/<[^>]+>/g, "").replace(/&[a-z#0-9]+;/gi, " ");
+        const it = this.item(root, "", snip);
+        if (!it.author) { const am = snip.match(/저자[\s:：]+([가-힣]{2,12})/); if (am) it.author = am[1]; }
+        seen.set(root, it);
       }
-      const list = [...seen.values()].slice(0, 20);
-      // 저자(머리말)를 한 번에 가져와 채우기
-      const need = list.filter(it => !it.author);
-      if (need.length) {
+      const list = [...seen.values()].slice(0, 24);
+      await this.fillAuthors(list);
+      return list;
+    },
+    async searchAuthor(q){
+      const name = q.replace(/^저자[\s:：]*/, "").trim();
+      const out = new Map();
+      const addFrom = async (authorPage, label) => {
+        const j = await fetchJSON(`${this.api}?action=query&list=backlinks&bltitle=${enc(authorPage)}&blnamespace=0&bllimit=500&blfilterredir=nonredirects&format=json&origin=*`);
+        for (const b of (j.query?.backlinks || [])) { const root = b.title.split("/")[0]; if (!out.has(root)) out.set(root, this.item(root, label)); }
+      };
+      try { await addFrom("저자:" + name, name); } catch (e) {}
+      if (out.size === 0) { // 부분 일치: 저자 이름 후보를 찾아서
         try {
-          const w = await fetchJSON(`${this.api}?action=query&prop=revisions&rvprop=content&rvslots=main&rvsection=0&titles=${enc(need.map(it => it.wtitle).join("|"))}&redirects=1&format=json&formatversion=2&origin=*`);
-          const norm = {}; for (const r of (w.query?.normalized || [])) norm[r.from] = r.to;
-          const byTitle = {}; for (const pg of (w.query?.pages || [])) byTitle[pg.title] = pg.revisions?.[0]?.slots?.main?.content || "";
-          for (const it of need) {
-            const wt = byTitle[norm[it.wtitle] || it.wtitle] || "";
-            const am = wt.match(/(?:저자|author)\s*=\s*(?:\[\[\s*(?:저자|Author)\s*:)?\s*([^\|\]\n}#]+)/i);
-            if (am) { const a = am[1].trim(); if (a && !/^\s*$/.test(a) && a.length <= 20) it.author = a; }
-          }
+          const p = await fetchJSON(`${this.api}?action=query&list=prefixsearch&pssearch=${enc("저자:" + name)}&pslimit=5&format=json&origin=*`);
+          for (const a of (p.query?.prefixsearch || [])) { try { await addFrom(a.title, a.title.replace(/^저자:/, "")); } catch (e) {} }
         } catch (e) {}
       }
-      return list;
+      return [...out.values()].slice(0, 60);
+    },
+    async fillAuthors(list){
+      const need = list.filter(it => !it.author);
+      if (!need.length) return;
+      try {
+        const w = await fetchJSON(`${this.api}?action=query&prop=revisions&rvprop=content&rvslots=main&rvsection=0&titles=${enc(need.map(it => it.wtitle).join("|"))}&redirects=1&format=json&formatversion=2&origin=*`);
+        const norm = {}; for (const r of (w.query?.normalized || [])) norm[r.from] = r.to;
+        const byTitle = {}; for (const pg of (w.query?.pages || [])) byTitle[pg.title] = pg.revisions?.[0]?.slots?.main?.content || "";
+        for (const it of need) {
+          const wt = byTitle[norm[it.wtitle] || it.wtitle] || "";
+          const am = wt.match(/(?:저자|author)\s*=\s*(?:\[\[\s*(?:저자|Author)\s*:)?\s*([^\|\]\n}#]+)/i);
+          if (am) { const a = am[1].trim(); if (a && a.length <= 20) it.author = a; }
+        }
+      } catch (e) {}
     },
     async parse(title){
       const j = await fetchJSON(`${this.api}?action=parse&page=${enc(title)}&prop=text&redirects=1&formatversion=2&format=json&origin=*`);

@@ -27,8 +27,12 @@
     <section class="card">
       <h3>무료 책 찾아 담기</h3>
       <p class="d">저작권이 끝난 <b>한국어</b> 작품만 검색돼요 (위키문헌: 현진건, 김유정, 이상, 이효석, 채만식, 한용운, 윤동주 등의 근대 소설·시와 옛 이야기).</p>
-      <form id="sform" style="display:flex;gap:10px">
-        <input type="search" id="q" placeholder="예: 운수 좋은 날, 동백꽃, 메밀꽃 필 무렵, 김유정" autocomplete="off" enterkeyhint="search"
+      <div class="seg" id="modeSeg">
+        <button data-mode="title" aria-pressed="true">제목으로</button>
+        <button data-mode="author" aria-pressed="false">작가로</button>
+      </div>
+      <form id="sform" style="display:flex;gap:10px;margin-top:12px">
+        <input type="search" id="q" placeholder="예: 운수 좋은 날, 동백꽃, 메밀꽃 필 무렵" autocomplete="off" enterkeyhint="search"
           style="flex:1;min-width:0;background:var(--desk);border:1px solid var(--line);border-radius:14px;color:var(--cream);padding:13px 16px;font-size:16px;outline:none">
         <button class="btn primary" type="submit">검색</button>
       </form>
@@ -141,22 +145,28 @@ drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); addFiles([...e.dataTransfer.files]); });
 
 /* ---------- 무료 책 ---------- */
-let results = new Map(), seq = 0;
+let results = new Map(), seq = 0, MODE = "title";
+$("#modeSeg").onclick = e => {
+  const b = e.target.closest("button[data-mode]"); if (!b) return;
+  MODE = b.dataset.mode;
+  for (const x of $("#modeSeg").children) x.setAttribute("aria-pressed", String(x.dataset.mode === MODE));
+  $("#q").placeholder = MODE === "author" ? "예: 김유정, 현진건, 이효석, 한용운" : "예: 운수 좋은 날, 동백꽃, 메밀꽃 필 무렵";
+  const q = $("#q").value.trim(); if (q) search(q);
+};
 $("#sform").onsubmit = e => { e.preventDefault(); const q = $("#q").value.trim(); if (q) { $("#q").blur(); search(q); } };
 async function search(q){
-  const my = ++seq, srcs = ["ws"]; // 한국어 작품만
+  const my = ++seq;
   $("#results").innerHTML = `<div class="spin" style="margin:20px auto"></div>`;
-  const settled = await Promise.allSettled(srcs.map(s => Sources[s].search(q)));
+  let items, err;
+  try { items = await Sources.ws.search(q, MODE); } catch (e) { err = e; }
   if (my !== seq) return;
   results = new Map();
   const have = new Set(LIB.books.map(b => b.srcId).filter(Boolean));
   let html = "";
-  settled.forEach((r, i) => {
-    const s = srcs[i], items = r.status === "fulfilled" ? r.value : null;
-    if (srcs.length > 1) html += `<div class="grp">${Sources[s].label}</div>`;
-    if (!items) { html += `<div class="empty">이 도서관에 연결하지 못했어요.<br><small>${esc(r.reason?.message || "")}</small></div>`; return; }
-    if (!items.length) { html += `<div class="empty">결과가 없어요. 작품 제목이나 작가 이름으로 찾아보세요.</div>`; return; }
-    html += `<div class="results">` + items.map(it => { results.set(it.id, it); const got = have.has(it.id); return `
+  {
+    if (err) { html += `<div class="empty">도서관에 연결하지 못했어요.<br><small>${esc(err.message || "")}</small></div>`; }
+    else if (!items.length) { html += `<div class="empty">결과가 없어요.<br>${MODE === "author" ? "작가 이름을 정확히 입력해 보세요 (예: 김유정, 현진건)." : "제목의 일부로 찾거나, ‘작가로’ 탭에서 작가 이름으로 찾아보세요."}</div>`; }
+    else html += `<div class="results">` + items.map(it => { results.set(it.id, it); const got = have.has(it.id); return `
       <div class="res">
         <div class="cv">${coverHTML(it)}</div>
         <div class="info"><div class="t">${esc(it.title)}</div>${it.author ? `<div class="a">${esc(it.author)}</div>` : ""}
@@ -164,7 +174,7 @@ async function search(q){
           <div class="act"><button class="btn ${got ? "" : "primary"}" data-get="${esc(it.id)}" ${got ? "disabled" : ""}>${got ? "담김 ✓" : "저장소에 담기"}</button></div>
         </div>
       </div>`; }).join("") + `</div>`;
-  });
+  }
   html += `<p class="d" style="margin-top:14px">찾는 책이 없나요? 아직 저작권이 남아 있는 책(요즘 소설, 번역 소설, 만화)은 여기서 받을 수 없어요. 직접 산 DRM 없는 파일이나 직접 스캔한 파일이 있다면 아래 ‘내 파일 올리기’로 올려 주세요.</p>`;
   $("#results").innerHTML = html;
 }
