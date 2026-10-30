@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="common.css">
+<link rel="stylesheet" href="common.css?v=4">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
@@ -57,7 +57,7 @@
 <div id="loader" class="hidden"><div class="box"><div class="spin"></div><div class="msg" id="ldMsg"></div><div class="pg"><i id="ldBar"></i></div><div class="sub" id="ldSub"></div></div></div>
 <div id="toast" class="hidden"></div>
 
-<script src="common.js"></script>
+<script src="common.js?v=4"></script>
 <script>
 "use strict";
 let LIB = {v: 1, books: []};
@@ -242,5 +242,6 @@ async function start(){
 }
 if (!GH.cfg()) showSetup(); else start();
 </script>
+<script>if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});</script>
 </body>
 </html>
