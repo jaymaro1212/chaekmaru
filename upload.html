@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#221d19">
+<title>책마루 책 담기</title>
+<link rel="icon" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="common.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+<main id="home">
+  <div class="top">
+    <div class="brand"><h1>책<span>마루</span></h1><p>책을 저장소에 담아 두면 서재에서 어느 기기로든 읽을 수 있어요</p></div>
+  </div>
+  <nav class="nav"><a href="index.html">서재 (책 뷰어)</a><a class="on" href="upload.html">책 담기</a></nav>
+
+  <section class="card hidden" id="setup"></section>
+
+  <div id="main" class="hidden">
+    <div class="row" id="connRow" style="margin-top:16px"></div>
+
+    <section class="card">
+      <h3>무료 책 찾아 담기</h3>
+      <p class="d">저작권이 끝난 <b>한국어</b> 작품만 검색돼요 (위키문헌: 현진건, 김유정, 이상, 이효석, 채만식, 한용운, 윤동주 등의 근대 소설·시와 옛 이야기).</p>
+      <form id="sform" style="display:flex;gap:10px">
+        <input type="search" id="q" placeholder="예: 운수 좋은 날, 동백꽃, 메밀꽃 필 무렵, 김유정" autocomplete="off" enterkeyhint="search"
+          style="flex:1;min-width:0;background:var(--desk);border:1px solid var(--line);border-radius:14px;color:var(--cream);padding:13px 16px;font-size:16px;outline:none">
+        <button class="btn primary" type="submit">검색</button>
+      </form>
+      <div id="results" style="margin-top:14px"></div>
+    </section>
+
+    <section class="card">
+      <h3>내 파일 올리기</h3>
+      <p class="d">직접 산 <b>DRM 없는</b> 전자책이나 직접 스캔·작성한 파일을 올려요. TXT, EPUB, PDF, CBZ(만화 압축) 파일을 쓸 수 있고, 파일 하나에 90MB까지 올릴 수 있어요.</p>
+      <div class="drop" id="drop"><b>여기를 눌러 파일 고르기</b><small>또는 파일을 끌어다 놓기 · 여러 개 한 번에 가능</small></div>
+      <input type="file" id="fileIn" multiple hidden accept=".txt,.epub,.pdf,.cbz,.zip,text/plain,application/epub+zip,application/pdf">
+      <div class="jobs" id="jobs"></div>
+    </section>
+
+    <section class="card">
+      <h3>저장소에 담긴 책 <small id="cnt" style="font-family:var(--ui);font-size:13px;color:var(--muted);font-weight:400"></small></h3>
+      <div class="mlist" id="mlist" style="margin-top:12px"></div>
+    </section>
+  </div>
+</main>
+
+<div id="loader" class="hidden"><div class="box"><div class="spin"></div><div class="msg" id="ldMsg"></div><div class="pg"><i id="ldBar"></i></div><div class="sub" id="ldSub"></div></div></div>
+<div id="toast" class="hidden"></div>
+
+<script src="common.js"></script>
+<script>
+"use strict";
+let LIB = {v: 1, books: []};
+const MAX = 90 * 1048576;
+const canOwnFiles = () => GH.cfg()?.private !== false;
+
+/* ---------- 저장소에 올리기 ---------- */
+async function putBook({title, author, type, format, ext, blob, coverBlob, coverUrl, source, srcId}, step){
+  const c = GH.cfg();
+  if (c.canWrite === false) throw new Error("토큰에 쓰기 권한이 없어요 (Contents: Read and write)");
+  if (blob.size > MAX) throw new Error(`파일이 너무 커요 (${fmtMB(blob.size)}). 90MB까지 올릴 수 있어요`);
+  const id = newId();
+  const path = `books/${id}.${ext}`;
+  step?.("저장소에 올리는 중…");
+  const content = await GH.put(path, await blobToB64(blob), `책 올리기: ${title}`);
+  const entry = {id, title, author: author || "", type, format, path, sha: content.sha, size: blob.size, source, added: Date.now()};
+  if (srcId) entry.srcId = srcId;
+  if (coverUrl) entry.coverUrl = coverUrl;
+  if (coverBlob) {
+    step?.("표지 올리는 중…");
+    try { await GH.put(`covers/${id}.jpg`, await blobToB64(coverBlob), `표지: ${title}`); entry.coverPath = `covers/${id}.jpg`; } catch (e) {}
+  }
+  step?.("목록에 추가하는 중…");
+  LIB = await Library.add(entry);
+  renderManage();
+  return entry;
+}
+
+/* ---------- 내 파일 ---------- */
+async function prepareOwnFile(file){
+  const ext = file.name.split(".").pop().toLowerCase();
+  const name = file.name.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").trim();
+  if (file.size > MAX) throw new Error(`파일이 너무 커요 (${fmtMB(file.size)})`);
+  if (ext === "txt") {
+    const paras = textToParas(decodeText(await file.arrayBuffer()));
+    if (paras.length < 2) throw new Error("내용이 거의 없는 파일이에요");
+    return {title: name, type: "text", format: "txt", ext, blob: file};
+  }
+  if (ext === "epub") {
+    const r = await readEpub(file);
+    return {title: r.title || name, author: r.author, type: "text", format: "epub", ext, blob: file, coverBlob: r.coverBlob ? await thumbFromImage(r.coverBlob).catch(() => null) : null};
+  }
+  if (ext === "cbz" || ext === "zip") {
+    const z = await JSZip.loadAsync(file);
+    const names = Object.keys(z.files).filter(n => !z.files[n].dir && IMG_RE.test(n) && !/__MACOSX/.test(n)).sort(natCmp);
+    if (!names.length) throw new Error("이미지가 들어 있지 않은 압축 파일이에요");
+    const first = new Blob([await z.files[names[0]].async("arraybuffer")]);
+    return {title: name, type: "comic", format: "cbz", ext: "cbz", blob: file, coverBlob: await thumbFromImage(first).catch(() => null)};
+  }
+  if (ext === "pdf") {
+    const doc = await openPdf(file);
+    let title = name;
+    try { const md = await doc.getMetadata(); const t = (md?.info?.Title || "").trim(); if (t.length > 1 && !/^(untitled|제목 없음|microsoft word|document\d*$)/i.test(t)) title = t.replace(/^Microsoft Word - /i, ""); } catch (e) {}
+    const coverBlob = await pdfPageBlob(doc, 0, 320).catch(() => null);
+    const pages = doc.numPages; doc.destroy();
+    return {title, type: "comic", format: "pdf", ext, blob: file, coverBlob, pages};
+  }
+  throw new Error("TXT, EPUB, PDF, CBZ 파일만 올릴 수 있어요");
+}
+let jobQ = Promise.resolve();
+function addFiles(files){
+  if (!canOwnFiles()) { toast("공개 저장소에는 내 파일을 올릴 수 없어요. 저장소를 비공개로 바꿔 주세요", 5000); return; }
+  for (const f of files) {
+    const row = document.createElement("div"); row.className = "job";
+    row.innerHTML = `<div class="n"></div><div class="st">기다리는 중</div>`;
+    row.querySelector(".n").textContent = f.name;
+    $("#jobs").prepend(row);
+    const st = m => row.querySelector(".st").textContent = m;
+    jobQ = jobQ.then(async () => {
+      try {
+        st("파일 확인 중…");
+        const info = await prepareOwnFile(f);
+        await putBook({...info, source: "own"}, st);
+        row.classList.add("done"); st("담김 ✓");
+        row.querySelector(".n").textContent = `${info.title}${info.author ? " · " + info.author : ""}`;
+      } catch (e) { console.error(e); row.classList.add("fail"); st("실패: " + e.message); }
+    });
+  }
+}
+const drop = $("#drop");
+drop.onclick = () => $("#fileIn").click();
+$("#fileIn").onchange = e => { addFiles([...e.target.files]); e.target.value = ""; };
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); addFiles([...e.dataTransfer.files]); });
+
+/* ---------- 무료 책 ---------- */
+let results = new Map(), seq = 0;
+$("#sform").onsubmit = e => { e.preventDefault(); const q = $("#q").value.trim(); if (q) { $("#q").blur(); search(q); } };
+async function search(q){
+  const my = ++seq, srcs = ["ws"]; // 한국어 작품만
+  $("#results").innerHTML = `<div class="spin" style="margin:20px auto"></div>`;
+  const settled = await Promise.allSettled(srcs.map(s => Sources[s].search(q)));
+  if (my !== seq) return;
+  results = new Map();
+  const have = new Set(LIB.books.map(b => b.srcId).filter(Boolean));
+  let html = "";
+  settled.forEach((r, i) => {
+    const s = srcs[i], items = r.status === "fulfilled" ? r.value : null;
+    if (srcs.length > 1) html += `<div class="grp">${Sources[s].label}</div>`;
+    if (!items) { html += `<div class="empty">이 도서관에 연결하지 못했어요.<br><small>${esc(r.reason?.message || "")}</small></div>`; return; }
+    if (!items.length) { html += `<div class="empty">결과가 없어요. 작품 제목이나 작가 이름으로 찾아보세요.</div>`; return; }
+    html += `<div class="results">` + items.map(it => { results.set(it.id, it); const got = have.has(it.id); return `
+      <div class="res">
+        <div class="cv">${coverHTML(it)}</div>
+        <div class="info"><div class="t">${esc(it.title)}</div>${it.author ? `<div class="a">${esc(it.author)}</div>` : ""}
+          ${it.snippet ? `<div class="s">${esc(it.snippet)}</div>` : ""}
+          <div class="act"><button class="btn ${got ? "" : "primary"}" data-get="${esc(it.id)}" ${got ? "disabled" : ""}>${got ? "담김 ✓" : "저장소에 담기"}</button></div>
+        </div>
+      </div>`; }).join("") + `</div>`;
+  });
+  html += `<p class="d" style="margin-top:14px">찾는 책이 없나요? 아직 저작권이 남아 있는 책(요즘 소설, 번역 소설, 만화)은 여기서 받을 수 없어요. 직접 산 DRM 없는 파일이나 직접 스캔한 파일이 있다면 아래 ‘내 파일 올리기’로 올려 주세요.</p>`;
+  $("#results").innerHTML = html;
+}
+$("#results").onclick = async e => {
+  const b = e.target.closest("[data-get]"); if (!b) return;
+  const it = results.get(b.dataset.get); if (!it) return;
+  b.disabled = true; b.textContent = "받는 중…";
+  try {
+    const r = await Sources[it.source].load(it, (m, p) => { b.textContent = p != null ? `${m.replace(/…$/, "")} ${Math.round(p * 100)}%` : m; });
+    const title = r.meta.title || it.title, author = r.meta.author || it.author;
+    let up;
+    if (r.content.paras) up = {type: "text", format: "bookjson", ext: "book.json", blob: new Blob([JSON.stringify({v: 1, title, author, paras: r.content.paras})], {type: "application/json"})};
+    else if (r.content.pages) up = {type: "comic", format: "comicjson", ext: "comic.json", blob: new Blob([JSON.stringify({v: 1, title, pages: r.content.pages})], {type: "application/json"})};
+    else up = {type: "comic", format: "cbz", ext: "cbz", blob: r.content.zip};
+    await putBook({title, author, ...up, coverUrl: it.cover || "", source: it.source, srcId: it.id}, m => b.textContent = m);
+    b.textContent = "담김 ✓"; b.classList.remove("primary");
+    toast(`“${title}”을(를) 담았어요. 서재에서 읽을 수 있어요`);
+  } catch (err) { console.error(err); b.disabled = false; b.textContent = "다시 시도"; toast("담지 못했어요: " + err.message, 4500); }
+};
+
+/* ---------- 관리 ---------- */
+const FMT = {bookjson: "소설", comicjson: "만화(온라인)", txt: "TXT", epub: "EPUB", cbz: "CBZ 만화", pdf: "PDF"};
+function renderManage(){
+  const list = [...LIB.books].sort((a, b) => b.added - a.added);
+  $("#cnt").textContent = list.length ? `${list.length}권 · ${fmtMB(list.reduce((s, b) => s + (b.size || 0), 0))}` : "";
+  $("#mlist").innerHTML = list.length ? list.map(b => `
+    <div class="mrow">
+      <div class="cv">${b.coverUrl ? coverHTML(b, b.coverUrl) : genCover(b.title, b.author)}</div>
+      <div class="i"><div class="t">${esc(b.title)}</div><div class="a">${esc([b.author, FMT[b.format] || b.format, b.size ? fmtMB(b.size) : ""].filter(Boolean).join(" · "))}</div></div>
+      <button class="btn ghost" data-edit="${esc(b.id)}">이름 수정</button>
+      <button class="btn ghost danger" data-del="${esc(b.id)}">빼기</button>
+    </div>`).join("") : `<div class="empty">아직 담긴 책이 없어요.</div>`;
+}
+$("#mlist").onclick = async e => {
+  const ed = e.target.closest("[data-edit]"), dl = e.target.closest("[data-del]");
+  const b = LIB.books.find(x => x.id === (ed || dl)?.dataset[ed ? "edit" : "del"]); if (!b) return;
+  try {
+    if (ed) {
+      const title = prompt("책 제목", b.title); if (title == null) return;
+      const author = prompt("작가", b.author || ""); if (author == null) return;
+      loader("고치는 중…"); LIB = await Library.edit(b.id, {title: title.trim() || b.title, author: author.trim()});
+    } else {
+      if (!confirm(`“${b.title}”을(를) 저장소에서 지울까요?`)) return;
+      loader("지우는 중…"); LIB = await Library.remove(b);
+    }
+    loader(false); renderManage();
+  } catch (err) { loader(false); toast("실패: " + err.message, 4000); }
+};
+
+/* ---------- 시작 ---------- */
+function showSetup(){
+  $("#setup").classList.remove("hidden"); $("#main").classList.add("hidden");
+  renderSetup($("#setup"), () => { $("#setup").classList.add("hidden"); start(); });
+}
+async function start(){
+  const c = GH.cfg();
+  $("#main").classList.remove("hidden");
+  $("#connRow").innerHTML = `<span class="ok-badge">● ${esc(c.owner)}/${esc(c.repo)} 연결됨 ${c.private ? "(비공개)" : ""}</span><button class="btn ghost" id="chg" style="padding:5px 12px;font-size:12.5px">연결 설정</button>` +
+    (c.private === false ? `<div class="warn" style="flex-basis:100%">이 저장소는 <b>공개</b> 상태예요. 누구나 파일을 볼 수 있어서 산 책을 올리면 저작권 문제가 생길 수 있어요. GitHub에서 Settings → Danger Zone → Change visibility로 비공개로 바꾼 뒤 다시 연결해 주세요. (그 전까지는 무료 책만 담을 수 있어요)</div>` : "") +
+    (c.canWrite === false ? `<div class="warn" style="flex-basis:100%">토큰에 쓰기 권한이 없어요. Contents 권한을 Read and write로 바꿔 주세요.</div>` : "");
+  $("#chg").onclick = showSetup;
+  drop.style.opacity = canOwnFiles() ? 1 : .4;
+  LIB = Library.cached() || LIB; renderManage();
+  try { LIB = await Library.load(); renderManage(); } catch (e) { toast("목록을 불러오지 못했어요: " + e.message, 4000); }
+}
+if (!GH.cfg()) showSetup(); else start();
+</script>
+</body>
+</html>

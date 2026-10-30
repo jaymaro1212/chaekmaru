@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#221d19">
+<meta name="mobile-web-app-capable" content="yes">
+<title>책마루 서재</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Nanum+Myeongjo:wght@400;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="common.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+<main id="home">
+  <div class="top">
+    <div class="brand"><h1>책<span>마루</span></h1><p>내 저장소의 책을 꺼내 읽는 서재</p></div>
+    <div class="top-actions">
+      <button class="btn" id="btnSync" title="저장소에서 새로 불러오기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4"/></svg>새로고침</button>
+      <button class="btn" id="btnFs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>전체 화면</button>
+    </div>
+  </div>
+  <nav class="nav"><a class="on" href="index.html">서재 (책 뷰어)</a><a href="upload.html">책 담기</a></nav>
+
+  <section class="card hidden" id="setup"></section>
+
+  <section id="shelfSec" class="hidden">
+    <h2 class="sec">내 서재 <small id="libInfo"></small></h2>
+    <div id="library"></div>
+    <p class="note">
+      책은 GitHub 비공개 저장소 <b id="repoName"></b>에서 불러와요. 한 번 연 책은 이 기기에 저장돼서 다음부터는 바로 열리고, 인터넷이 없어도 읽을 수 있어요.
+      읽던 위치는 책을 닫을 때 저장소에 함께 저장돼서 다른 기기에서도 이어 읽을 수 있어요.
+      화면 가운데를 누르면 메뉴, 양옆을 누르거나 밀면 페이지가 넘어가요. · <a href="#" id="lnkSetup" style="color:var(--cream-dim)">저장소 연결 설정</a>
+    </p>
+  </section>
+</main>
+
+<div id="loader" class="hidden"><div class="box"><div class="spin"></div><div class="msg" id="ldMsg"></div><div class="pg"><i id="ldBar"></i></div><div class="sub" id="ldSub"></div></div></div>
+<div id="toast" class="hidden"></div>
+
+<script src="common.js"></script>
+<script src="reader.js"></script>
+<script>
+"use strict";
+let LIB = {v: 1, books: []};
+const coverURLs = new Map();
+const Prog = {
+  all(){ try { return JSON.parse(localStorage.getItem("cm_prog") || "{}"); } catch (e) { return {}; } },
+  set(id, v){ const a = this.all(); a[id] = v; try { localStorage.setItem("cm_prog", JSON.stringify(a)); localStorage.setItem("cm_prog_dirty", "1"); } catch (e) {} },
+  merge(remote){ const a = this.all(); let changed = false; for (const [k, v] of Object.entries(remote || {})) if (!a[k] || (v.t || 0) > (a[k].t || 0)) { a[k] = v; changed = true; } if (changed) try { localStorage.setItem("cm_prog", JSON.stringify(a)); } catch (e) {} },
+  async push(){
+    const c = GH.cfg(); if (!c || c.canWrite === false) return;
+    try { if (localStorage.getItem("cm_prog_dirty") !== "1") return; } catch (e) { return; }
+    const mine = this.all();
+    try {
+      await GH.updateJSON("progress.json", () => ({}), remote => {
+        for (const [k, v] of Object.entries(mine)) if (!remote[k] || (v.t || 0) >= (remote[k].t || 0)) remote[k] = v;
+      }, "읽은 위치 저장");
+      localStorage.setItem("cm_prog_dirty", "0");
+    } catch (e) { console.warn("진도 동기화 실패", e); }
+  }
+};
+
+async function coverSrc(b){
+  if (b.coverUrl) return b.coverUrl;
+  if (!b.coverPath) return "";
+  if (coverURLs.has(b.id)) return coverURLs.get(b.id);
+  let rec = await Store.get("covers", b.id);
+  if (!rec) { try { rec = {id: b.id, blob: await GH.raw(b.coverPath)}; await Store.put("covers", rec); } catch (e) { return ""; } }
+  const u = URL.createObjectURL(rec.blob); coverURLs.set(b.id, u); return u;
+}
+async function renderLibrary(){
+  const prog = Prog.all();
+  const cachedIds = new Set(await Store.keys("files"));
+  const list = [...LIB.books].sort((a, b) => ((prog[b.id]?.t || b.added) - (prog[a.id]?.t || a.added)));
+  $("#libInfo").textContent = list.length ? `${list.length}권` : "";
+  if (!list.length) {
+    $("#library").innerHTML = `<div class="empty">저장소에 아직 책이 없어요.<br><a href="upload.html" style="color:var(--accent)">책 담기</a>에서 내 파일을 올리거나 무료 책을 담아 주세요.</div>`;
+    return;
+  }
+  $("#library").innerHTML = `<div class="shelf">` + list.map(b => `
+    <div class="bk" data-id="${esc(b.id)}">
+      ${cachedIds.has(b.id) ? `<span class="cached">기기에 저장됨</span>` : ""}
+      <div class="cv" data-cv="${esc(b.id)}">${b.coverUrl ? coverHTML(b, b.coverUrl) : genCover(b.title, b.author)}</div>
+      <div class="t">${esc(b.title)}</div><div class="a">${esc(b.author || (b.type === "comic" ? "만화" : ""))}</div>
+      <div class="bar"><i style="width:${Math.round((prog[b.id]?.pct || 0) * 100)}%"></i></div>
+    </div>`).join("") + `</div>`;
+  for (const b of list) if (!b.coverUrl && b.coverPath) coverSrc(b).then(u => { const el = document.querySelector(`[data-cv="${CSS.escape(b.id)}"]`); if (u && el) el.innerHTML = `<img src="${u}" alt="">`; });
+}
+async function sync(quiet){
+  try {
+    if (!quiet) loader("저장소에서 불러오는 중…");
+    LIB = await Library.load();
+    const {data} = await GH.getJSON("progress.json"); Prog.merge(data);
+    // 저장소에서 빠진 책은 기기 저장분도 정리
+    const ids = new Set(LIB.books.map(b => b.id));
+    for (const k of await Store.keys("files")) if (!ids.has(k)) Store.del("files", k);
+    loader(false); renderLibrary();
+  } catch (e) {
+    loader(false);
+    if (e.status === 401 || e.status === 404) { toast(e.message, 5000); showSetup(); }
+    else toast("저장소에 연결하지 못했어요 — 기기에 저장된 목록을 보여드려요", 4000);
+  }
+}
+async function getFile(b){
+  const rec = await Store.get("files", b.id);
+  if (rec && (!b.sha || rec.sha === b.sha)) return rec.blob;
+  loader(`“${b.title}” 받는 중…`, 0, b.size ? fmtMB(b.size) : "");
+  const blob = await GH.raw(b.path, (got, total) => loader(`“${b.title}” 받는 중…`, total ? got / total : (b.size ? got / b.size : null), fmtMB(got) + (total || b.size ? " / " + fmtMB(total || b.size) : "")));
+  await Store.put("files", {id: b.id, sha: b.sha, blob});
+  return blob;
+}
+let openURLs = [];
+async function openEntry(b){
+  try {
+    const blob = await getFile(b);
+    loader("책을 펼치는 중…");
+    const meta = {id: b.id, title: b.title, author: b.author, type: b.type, pos: Prog.all()[b.id]?.pos};
+    const book = {meta};
+    if (b.format === "bookjson") book.paras = JSON.parse(await blob.text()).paras;
+    else if (b.format === "comicjson") book.imgs = JSON.parse(await blob.text()).pages;
+    else if (b.format === "txt") book.paras = textToParas(decodeText(await blob.arrayBuffer()));
+    else if (b.format === "epub") book.paras = (await readEpub(blob, p => loader("EPUB 읽는 중…", p))).paras;
+    else if (b.format === "cbz") { const imgs = await zipImages(blob, p => loader("압축 푸는 중…", p)); book.imgs = imgs.map(x => URL.createObjectURL(x)); openURLs = book.imgs; }
+    else if (b.format === "pdf") book.pdf = await openPdf(blob);
+    else throw new Error("모르는 형식이에요: " + b.format);
+    loader(false);
+    $("#home").classList.add("hidden");
+    await Reader.open(book, {
+      onProgress: (id, v) => Prog.set(id, v),
+      onClose: () => {
+        openURLs.forEach(u => URL.revokeObjectURL(u)); openURLs = []; book.pdf?.destroy?.();
+        $("#home").classList.remove("hidden"); renderLibrary(); Prog.push();
+      }
+    });
+  } catch (e) { loader(false); console.error(e); toast("열지 못했어요: " + (e.name === "AbortError" ? "시간이 너무 오래 걸려요" : e.message), 5000); }
+}
+$("#library").onclick = e => { const el = e.target.closest(".bk"); if (!el) return; const b = LIB.books.find(x => x.id === el.dataset.id); if (b) openEntry(b); };
+$("#btnSync").onclick = () => GH.cfg() ? sync() : showSetup();
+$("#btnFs").onclick = toggleFs;
+$("#lnkSetup").onclick = e => { e.preventDefault(); showSetup(); };
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") Prog.push(); });
+
+function showSetup(){
+  $("#setup").classList.remove("hidden"); $("#shelfSec").classList.add("hidden");
+  renderSetup($("#setup"), cfg => { $("#setup").classList.add("hidden"); startShelf(); });
+}
+function startShelf(){
+  const c = GH.cfg();
+  $("#shelfSec").classList.remove("hidden");
+  $("#repoName").textContent = `${c.owner}/${c.repo}`;
+  LIB = Library.cached() || LIB; renderLibrary();
+  sync(!!Library.cached());
+}
+(async () => {
+  await Store.open();
+  if (!GH.cfg()) showSetup(); else startShelf();
+})();
+</script>
+</body>
+</html>
