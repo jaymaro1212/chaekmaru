@@ -88,9 +88,9 @@ h2.sec small{font-family:var(--ui);font-size:13px;color:var(--muted);font-weight
 #reader.t-paper{--paper:#f8f2e4;--ink:#2b2520;--ink-soft:#8a7d6c;--desk-bg:#2a231e;--gutter:rgba(70,45,20,.20)}
 #reader.t-sepia{--paper:#efe0c2;--ink:#3d2f20;--ink-soft:#8c7556;--desk-bg:#3a2d22;--gutter:rgba(80,50,15,.24)}
 #reader.t-night{--paper:#1f1d1b;--ink:#cfc6b6;--ink-soft:#7a7266;--desk-bg:#0e0d0c;--gutter:rgba(0,0,0,.5)}
-#stage{position:absolute;inset:0;perspective:2400px}
+#stage{position:absolute;inset:0;-webkit-perspective:2400px;perspective:2400px}
 .bookwrap{position:absolute}
-.book{position:absolute;inset:0;transform-style:preserve-3d}
+.book{position:absolute;inset:0;-webkit-transform-style:preserve-3d;transform-style:preserve-3d}
 .book.rtl{transform:scaleX(-1)}
 .book.rtl .pin{transform:scaleX(-1)}
 .slot{position:absolute;top:0;width:var(--pw);height:var(--ph)}
@@ -119,7 +119,7 @@ h2.sec small{font-family:var(--ui);font-size:13px;color:var(--muted);font-weight
 .page.comic .pin{padding:0}
 .page.comic img{width:100%;height:100%;object-fit:contain;display:block}
 .page.comic .err{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--ink-soft);font-size:14px;text-align:center;padding:20px}
-.flipper{position:absolute;top:0;width:var(--pw);height:var(--ph);transform-style:preserve-3d;will-change:transform;z-index:5}
+.flipper{position:absolute;top:0;width:var(--pw);height:var(--ph);-webkit-transform-style:preserve-3d;transform-style:preserve-3d;will-change:transform;z-index:5}
 .face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden}
 .face.back{transform:rotateY(180deg)}
 .gloss{position:absolute;inset:0;pointer-events:none;opacity:0}

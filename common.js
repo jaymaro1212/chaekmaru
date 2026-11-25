@@ -533,4 +533,22 @@ function coverHTML(b, src){
   return genCover(b.title, b.author);
 }
 window.cmCoverFail = img => { const d = document.createElement("div"); d.innerHTML = genCover(img.dataset.t, img.dataset.a); img.replaceWith(d.firstElementChild); };
-function toggleFs(){ try { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen({navigationUI: "hide"}); } catch (e) { toast("전체 화면을 지원하지 않는 브라우저예요"); } }
+const isStandalone = () => (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
+const isIOS = () => /iP(hone|od|ad)/.test(navigator.platform) || (/Mac/.test(navigator.platform) && navigator.maxTouchPoints > 1) || /iPhone|iPad|iPod/.test(navigator.userAgent);
+function toggleFs(){
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  if (!req) { // 아이폰 사파리는 전체화면 API가 없음 — 홈 화면 추가로 안내
+    toast(isIOS() ? "아이폰은 공유 버튼(⬆️) → ‘홈 화면에 추가’를 하면 전체화면으로 열려요" : "이 브라우저는 전체 화면을 지원하지 않아요", 4500);
+    return;
+  }
+  try { if (document.fullscreenElement || document.webkitFullscreenElement) exit.call(document); else req.call(el, {navigationUI: "hide"}); }
+  catch (e) { try { req.call(el); } catch (_) { toast("전체 화면을 지원하지 않는 브라우저예요"); } }
+}
+// 이미 홈 화면 앱(전체화면)으로 실행 중이거나 전체화면 API가 없으면 전체화면 버튼 숨김
+function setupFsButtons(){
+  const hide = isStandalone() || !(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+  if (hide) document.querySelectorAll("#btnFs, #rFs").forEach(b => { if (b) b.style.display = "none"; });
+}
+window.addEventListener("load", () => { try { setupFsButtons(); } catch (e) {} });
