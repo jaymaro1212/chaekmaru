@@ -76,7 +76,7 @@ const S = (() => {
 /* ============ GitHub 저장소 ============ */
 const GH = {
   cfg(){ try { return JSON.parse(localStorage.getItem("cm_gh") || "null"); } catch (e) { return null; } },
-  save(c){ try { localStorage.setItem("cm_gh", JSON.stringify(c)); } catch (e) {} },
+  save(c){ try { localStorage.setItem("cm_gh", JSON.stringify(c)); } catch (e) {} requestPersist(); },
   clear(){ try { localStorage.removeItem("cm_gh"); } catch (e) {} },
   url(path){ const c = this.cfg(); return `https://api.github.com/repos/${enc(c.owner)}/${enc(c.repo)}` + (path ? "/" + path : ""); },
   async req(path, {method = "GET", body, accept = "application/vnd.github+json", ms = 60000} = {}){
@@ -551,4 +551,11 @@ function setupFsButtons(){
   const hide = isStandalone() || !(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
   if (hide) document.querySelectorAll("#btnFs, #rFs").forEach(b => { if (b) b.style.display = "none"; });
 }
-window.addEventListener("load", () => { try { setupFsButtons(); } catch (e) {} });
+// 브라우저에 저장 데이터(로그인·책 캐시)를 지우지 말아 달라고 요청 — 로그인 유지가 더 오래감
+let _persistTried = false;
+async function requestPersist(){
+  if (_persistTried || !navigator.storage?.persist) return;
+  _persistTried = true;
+  try { if (!(await navigator.storage.persisted())) await navigator.storage.persist(); } catch (e) {}
+}
+window.addEventListener("load", () => { try { setupFsButtons(); } catch (e) {} requestPersist(); });
